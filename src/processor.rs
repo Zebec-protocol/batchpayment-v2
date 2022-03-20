@@ -22,16 +22,16 @@ pub struct Processor {}
 
 impl Processor {
 
-    pub fn process_set(program_id: &Pubkey,accounts: &[AccountInfo],number:u64,amount:Vec<u64>) -> ProgramResult 
+    pub fn process_set(program_id: &Pubkey,accounts: &[AccountInfo],number:u64,percent:Vec<u64>) -> ProgramResult 
     {
         //executed once
         let account_info_iter = &mut accounts.iter();
-        let payer_account = next_account_info(account_info_iter)?; // payer account
+        let payer_account = next_account_info(account_info_iter)?; // admin who updates the price
         let system_program = next_account_info(account_info_iter)?;
-        let vault =next_account_info(account_info_iter)?;   // vault where amount can be send anywhere
+        let vault =next_account_info(account_info_iter)?;
         let pda_data =next_account_info(account_info_iter)?; //account to save data // this account gives the price feed
      
-        //Was the transaction signed by account's private key
+        //Was the transaction signed by admin account's private key
         if !payer_account.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
         }
@@ -47,17 +47,19 @@ impl Processor {
             return Err(ProgramError::MissingRequiredSignature);
         }
         msg!("The instruction is signed");        
+          //Was the transaction updated by admin account
         let rent = Rent::get()?;
-        let transfer_amount =  rent.minimum_balance (10240 as usize); //largest possible account is created 
-        let mut flag:u8=1;
-       if pda_data.data_is_empty()
-       {
+        let size: u64=std::mem::size_of::<Payments>() as u64 + number*(std::mem::size_of::<Pubkey>()+std::mem::size_of::<u64>()) as u64;
+        let transfer_amount =  rent.minimum_balance (size as usize);
+       //creating the data feed account
+       msg!("The payment data account is created...");
+ 
         invoke(
             &system_instruction::create_account(
                 payer_account.key,
                 pda_data.key,
                 transfer_amount,
-                10240,
+                size,
                 program_id,
             ),
             &[
@@ -66,54 +68,28 @@ impl Processor {
                 system_program.clone(),
             ],
         )?;
-        flag =0;
-    }
 
         msg!("The payment account is complete being created");
         let mut pda_start = Payments::from_account(pda_data)?;
         msg!("Data writing...");
         //escrow.signed_by.push(signed_by);
-        let mut sending_amount: u64=0;
-        let mut i:usize=0;
-        let mut num:u64=number;
-        if flag==1
-        {
-            i+=pda_start.amounts.len();
-            num+= pda_start.amounts.len() as u64;
-            pda_start.total_amount=0;
-            if pda_start.payer!=*payer_account.key
-            {
-                return Err(ProgramError::MissingRequiredSignature);
-            }
-        }
-        while i<(num as usize)
+        let mut sum:u64=0;
+       for i in 0..number as usize
         {
             let payeeee = next_account_info(account_info_iter)?;
             msg!("The paying account is :{}",*payeeee.key);
-            pda_start.payee.push(*payeeee.key);
-            sending_amount+=amount[i];
-            msg!("Amount to be payed amount is :{}",amount[i]);
-            pda_start.amounts.push(amount[i]);
-            i=i+1;
+            pda_start.payment[i].payee=*payeeee.key;
+            pda_start.payment[i].percent=percent[i];
+            sum+=percent[i];
+            pda_start.payment[i].payment=0;
         }
-        pda_start.total_amount+=sending_amount;
-        if **vault.try_borrow_lamports()?<= pda_start.total_amount
+        if sum !=1000000
         {
-            invoke(
-                &system_instruction::transfer(
-                    payer_account.key,
-                    vault.key,
-                    pda_start.total_amount-**vault.try_borrow_lamports()?,
-                ),
-                &[
-                    payer_account.clone(),
-                    vault.clone(),
-                    system_program.clone()
-                ],
-            )?;
-
+            msg!("The sum of percentages is not 1000 ");
+            return Err(ProgramError::MissingRequiredSignature);
         }
         pda_start.payer=*payer_account.key;
+        pda_start.total_amount=0;
         pda_start.serialize(&mut *pda_data.data.borrow_mut())?;
         msg!("Data writing complete");
         Ok(())
@@ -130,10 +106,6 @@ impl Processor {
         let vault=next_account_info(account_info_iter)?; 
         let system_program=next_account_info(account_info_iter)?;
         msg!("Verifying ...");
-        if !payee_account.is_signer {
-            return Err(ProgramError::MissingRequiredSignature);
-        } 
-
         let (vault_address, bump_seed) = Pubkey::find_program_address(
             &[
                 &payer_account.key.to_bytes(),
@@ -161,26 +133,34 @@ impl Processor {
         {
             return Err(ProgramError::MissingRequiredSignature);
         }
-        let mut transfer_amount=0;
+        let mut total_paid_amount=0;
+        let mut percent=0;
+        let mut index:usize=0;
 
-        for i in 0..pda_start.payee.len()
+        for i in 0..pda_start.payment.len()
         {
            
-            if *payee_account.key == pda_start.payee[i]
+         if *payee_account.key == pda_start.payment[i].payee
             {
-                transfer_amount=pda_start.amounts[i];
-                pda_start.amounts[i]=0;
-                pda_start.total_amount-=transfer_amount;
-
+                percent=pda_start.payment[i].percent;
+                index=i;
             }
+        total_paid_amount+=pda_start.payment[i].payment;
         }
-        if transfer_amount>0
+        let lamports = **vault.try_borrow_lamports()?;
+        if total_paid_amount+lamports > pda_start.total_amount
+        {
+            pda_start.total_amount=total_paid_amount+lamports;
+        }
+        let amount_to_pay:u64=pda_start.total_amount*percent/1000000-pda_start.payment[index].payment; //provide the percent in similar fashion
+
+        if percent>0 && amount_to_pay>0
         {
             invoke_signed(
                 &system_instruction::transfer(
                     vault.key,
                     payee_account.key,
-                    transfer_amount,
+                    amount_to_pay,
                 ),
                 &[
                     payee_account.clone(),
@@ -188,13 +168,14 @@ impl Processor {
                     system_program.clone()
                 ],&[&pda_signer_seeds],
             )?;
+            pda_start.payment[index].payment+=amount_to_pay;
+
         }
         else
         {
-            msg!("Your Account is not valid");
+            msg!("Your Account is not valid or you have already taken the payment ");
             return Err(ProgramError::MissingRequiredSignature);
-        }
-      
+        }      
         pda_start.serialize(&mut *pda_data.data.borrow_mut())?;
         msg!("Successfully Done");
         Ok(())

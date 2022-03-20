@@ -185,9 +185,9 @@ impl Processor {
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = TokenInstruction::unpack(input)?;
         match instruction {
-            TokenInstruction::ProcessSet(ProcessSet{number,amounts}) => {
+            TokenInstruction::ProcessSet(ProcessSet{number,percents}) => {
                 msg!("Instruction: Sending");
-                Self::process_set(program_id, accounts,number,amounts)
+                Self::process_set(program_id, accounts,number,percents)
             }
             TokenInstruction::ProcessClaim => {
                 msg!("Instruction: Claim");

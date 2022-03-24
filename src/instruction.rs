@@ -14,9 +14,15 @@ pub struct ProcessSet {
 
 }
 
+pub struct ProcessDepositSol {
+    pub amount: u64,
+
+}
+
 pub enum TokenInstruction {
     ProcessSet(ProcessSet),
     ProcessClaim,
+    ProcessDepositSol(ProcessDepositSol),
 }
 
 impl TokenInstruction {
@@ -44,6 +50,13 @@ impl TokenInstruction {
             }
             1 => {
                Self::ProcessClaim
+            }
+            2=> {
+                let (amount,_rest) = rest.split_at(8); //amount
+                let amount = amount.try_into().map(u64::from_le_bytes).or(Err(InvalidInstruction))?;
+                msg!("The number is {}",amount);
+                Self::ProcessDepositSol(ProcessDepositSol{amount})
+
             }
             _ => return Err(TokenError::InvalidInstruction.into()),
         })

@@ -9,7 +9,9 @@ use solana_program::{
 #[derive(BorshSerialize, BorshDeserialize, PartialEq, Debug, Clone)]
 pub struct Payments {
      
-    pub payment: Vec<Payee>,
+    pub payee: Vec<Pubkey>,
+    pub percent:Vec<u64>,
+    pub payment:Vec<u64>,
     pub payer: Pubkey,
     pub total_amount: u64,
 }

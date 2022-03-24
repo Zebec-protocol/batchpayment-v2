@@ -13,8 +13,8 @@ use solana_program::{
 };
 
 use crate::{
-    instruction::{ProcessSet,TokenInstruction},
-    state::Payments,
+    instruction::{ProcessSet,ProcessDepositSol,TokenInstruction},
+    state::{Payments},
 };
 
 pub const PREFIX: &str = "batchv2";
@@ -26,12 +26,12 @@ impl Processor {
     {
         //executed once
         let account_info_iter = &mut accounts.iter();
-        let payer_account = next_account_info(account_info_iter)?; // admin who updates the price
+        let payer_account = next_account_info(account_info_iter)?; // payer
         let system_program = next_account_info(account_info_iter)?;
         let vault =next_account_info(account_info_iter)?;
-        let pda_data =next_account_info(account_info_iter)?; //account to save data // this account gives the price feed
+        let pda_data =next_account_info(account_info_iter)?; //account to save data 
      
-        //Was the transaction signed by admin account's private key
+        //Was the transaction signed by payer account's private key
         if !payer_account.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
         }
@@ -47,11 +47,10 @@ impl Processor {
             return Err(ProgramError::MissingRequiredSignature);
         }
         msg!("The instruction is signed");        
-          //Was the transaction updated by admin account
         let rent = Rent::get()?;
         let size: u64=std::mem::size_of::<Payments>() as u64 + number*(std::mem::size_of::<Pubkey>()+std::mem::size_of::<u64>()) as u64;
         let transfer_amount =  rent.minimum_balance (size as usize);
-       //creating the data feed account
+       //creating the data  account
        msg!("The payment data account is created...");
  
         invoke(
@@ -72,16 +71,18 @@ impl Processor {
         msg!("The payment account is complete being created");
         let mut pda_start = Payments::from_account(pda_data)?;
         msg!("Data writing...");
-        //escrow.signed_by.push(signed_by);
         let mut sum:u64=0;
+
        for i in 0..number as usize
         {
             let payeeee = next_account_info(account_info_iter)?;
+           pda_start.payee.push(*payeeee.key);
             msg!("The paying account is :{}",*payeeee.key);
-            pda_start.payment[i].payee=*payeeee.key;
-            pda_start.payment[i].percent=percent[i];
+            pda_start.percent.push(percent[i]);
+            msg!("The percent is :{}",percent[i]);
             sum+=percent[i];
-            pda_start.payment[i].payment=0;
+            pda_start.payment.push(0);
+
         }
         if sum !=1000000
         {
@@ -140,19 +141,19 @@ impl Processor {
         for i in 0..pda_start.payment.len()
         {
            
-         if *payee_account.key == pda_start.payment[i].payee
+         if *payee_account.key == pda_start.payee[i]
             {
-                percent=pda_start.payment[i].percent;
+                percent=pda_start.percent[i];
                 index=i;
             }
-        total_paid_amount+=pda_start.payment[i].payment;
+        total_paid_amount+=pda_start.payment[i];
         }
         let lamports = **vault.try_borrow_lamports()?;
         if total_paid_amount+lamports > pda_start.total_amount
         {
             pda_start.total_amount=total_paid_amount+lamports;
         }
-        let amount_to_pay:u64=pda_start.total_amount*percent/1000000-pda_start.payment[index].payment; //provide the percent in similar fashion
+        let amount_to_pay:u64=pda_start.total_amount*percent/1000000-pda_start.payment[index]; //provide the percent in similar fashion
 
         if percent>0 && amount_to_pay>0
         {
@@ -168,7 +169,7 @@ impl Processor {
                     system_program.clone()
                 ],&[&pda_signer_seeds],
             )?;
-            pda_start.payment[index].payment+=amount_to_pay;
+            pda_start.payment[index]+=amount_to_pay;
 
         }
         else
@@ -181,6 +182,45 @@ impl Processor {
         Ok(())
 
     }
+    pub fn process_deposit_sol(program_id: &Pubkey,accounts: &[AccountInfo],amount:u64,) -> ProgramResult 
+    {
+        //executed once
+        let account_info_iter = &mut accounts.iter();
+        let sender=next_account_info(account_info_iter)?; //signer and amount sender
+        let original_payer_account = next_account_info(account_info_iter)?; // payer
+        let system_program = next_account_info(account_info_iter)?;
+        let vault =next_account_info(account_info_iter)?;
+    
+         //Was the transaction signed by payer account's private key
+         if !sender.is_signer {
+            return Err(ProgramError::MissingRequiredSignature);
+        }
+        let (vault_address, _bump_seed) = Pubkey::find_program_address(
+            &[
+                &original_payer_account.key.to_bytes(),
+                PREFIX.as_bytes(),
+            ],
+            program_id,
+        );
+        if vault_address!=*vault.key
+        {
+            return Err(ProgramError::MissingRequiredSignature);
+        }
+        invoke(
+            &system_instruction::transfer(
+                sender.key, 
+                vault.key,
+                 amount, ),
+             &[
+                 sender.clone(),
+                 vault.clone(),
+                 system_program.clone(),
+             ])?;
+             
+        Ok(())
+    }
+
+     
         
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
         let instruction = TokenInstruction::unpack(input)?;
@@ -192,6 +232,10 @@ impl Processor {
             TokenInstruction::ProcessClaim => {
                 msg!("Instruction: Claim");
                 Self::process_claim(program_id, accounts)
+            }
+            TokenInstruction::ProcessDepositSol(ProcessDepositSol{amount}) => {
+                msg!("Instruction: Sending");
+                Self::process_deposit_sol(program_id, accounts,amount)
             }
         }
     }

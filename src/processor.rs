@@ -48,7 +48,8 @@ impl Processor {
         }
         msg!("The instruction is signed");        
         let rent = Rent::get()?;
-        let size: u64=std::mem::size_of::<Payments>() as u64 + number*(std::mem::size_of::<Pubkey>()+std::mem::size_of::<u64>()) as u64;
+        let size: u64=std::mem::size_of::<Payments>() as u64 + number*(std::mem::size_of::<Pubkey>()+2*std::mem::size_of::<u64>()) as u64;
+        
         let transfer_amount =  rent.minimum_balance (size as usize);
        //creating the data  account
        msg!("The payment data account is created...");
